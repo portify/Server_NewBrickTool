@@ -1,5 +1,5 @@
 if ($Pref::Server::NewBrickTool::PlayerRange $= "")
-    $Pref::Server::NewBrickTool::PlayerRange = 250;
+    $Pref::Server::NewBrickTool::PlayerRange = 1000;
 
 if ($Pref::Server::NewBrickTool::AdminRange $= "")
     $Pref::Server::NewBrickTool::AdminRange = 1000;
@@ -58,10 +58,12 @@ datablock ParticleEmitterData(brickTrailEmitter)
     lifetimeVarianceMS = "0";
     useEmitterSizes = "0";
     useEmitterColors = "0";
-    uiName = " ";
+    uiName = "";
     doFalloff = "1";
     doDetail = "1";
 };
+
+brickTrailEmitter.uiName = "";
 
 datablock ParticleData(brickTrailOrigParticle)
 {
@@ -121,7 +123,7 @@ datablock ParticleEmitterData(brickTrailOrigEmitter)
 
 datablock StaticShapeData(NewBrickToolTrailShape)
 {
-	shapeFile = "./cylinder_glow.dts";
+    shapeFile = "./cylinder_glow.dts";
 };
 
 function Player::brickImageRepeat(%this)
@@ -178,11 +180,128 @@ function StaticShape::newBrickToolFade(%this, %a, %b, %color, %alpha)
     %this.schedule(25, "newBrickToolFade", %a, %b, %color, %alpha - 0.1);
 }
 
+function placeNewGhostBrick(%client, %pos, %normal, %noOrient)
+{
+    if ($Game::MissionCleaningUp)
+        return;
+
+    %player = %client.player;
+
+    if (!%player)
+        return;
+
+    if (%client.currInv > 0)
+        %data = %client.inventory[%client.currInv];
+    else if (isObject(%client.instantUseData))
+        %data = %client.instantUseData;
+
+    if (!isObject(%data))
+        return;
+
+    if (%data.getClassName() !$= "fxDTSBrickData")
+        return;
+
+    if (!isObject(%player.tempBrick))
+    {
+        %player.tempBrick = new fxDTSBrick()
+        {
+            dataBlock = %data;
+        };
+
+        if (isObject(%client.brickGroup))
+            %client.brickGroup.add(%player.tempBrick);
+        else
+            error("ERROR: brickDeployProjectile::onCollision() - client \"" @ %client.getPlayerName() @ "\" has no brick group.");
+
+        %player.tempBrick.setColor(%client.currentColor);
+
+        %noOrient = false;
+    }
+    else
+        %player.tempBrick.setDatablock(%data);
+
+    %aspectRatio = %data.printAspectRatio;
+
+    if (%aspectRatio !$= "")
+    {
+        if (%client.lastPrint[%aspectRatio] !$= "")
+            %player.tempBrick.setPrint(%client.lastPrint[%aspectRatio]);
+        else
+            %player.tempBrick.setPrint($printNameTable["letters/A"]);
+    }
+
+    if (!%noOrient)
+    {
+        %player.tempBrick.angleID = getAngleIDFromPlayer(%player);
+
+        switch ((%player.tempBrick.angleID + %data.orientationFix) % 4)
+        {
+            case 0: %rot = "0 0 1 0";
+            case 1: %rot = "0 0 -1 1.5708";
+            case 2: %rot = "0 0 1 3.14159";
+            case 3: %rot = "0 0 1 1.5708";
+        }
+    }
+    else
+        %rot = getWords(%player.tempBrick.getTransform(), 3, 6);
+
+    %box = %player.tempBrick.getObjectBox();
+
+    if ((%player.tempBrick.angleID) % 2 == 1)
+    {
+        %sizeX = getWord(%box, 4);
+        %sizeY = getWord(%box, 3);
+
+        %brickSizeX = %data.brickSizeY;
+        %brickSizeY = %data.brickSizeX;
+    }
+    else
+    {
+        %sizeX = getWord(%box, 3);
+        %sizeY = getWord(%box, 4);
+
+        %brickSizeX = %data.brickSizeX;
+        %brickSizeY = %data.brickSizeY;
+    }
+
+    %posX = getWord(%pos, 0) + %sizeX           * mFloatLength(getWord(%normal, 0), 0);
+    %posY = getWord(%pos, 1) + %sizeY           * mFloatLength(getWord(%normal, 1), 0);
+    %posZ = getWord(%pos, 2) + getWord(%box, 5) * mFloatLength(getWord(%normal, 2), 0);
+
+    if (     %brickSizeX % 2 == 1) %posX -= 0.25;
+    if (     %brickSizeY % 2 == 1) %posY -= 0.25;
+    if (%data.brickSizeZ % 2 == 1) %posZ -= 0.1;
+
+    %posX = mFloatLength(%posX * 2, 0) / 2;
+    %posY = mFloatLength(%posY * 2, 0) / 2;
+    %posZ = mFloatLength(%posZ * 5, 0) / 5;
+
+    if (     %brickSizeX % 2 == 1) %posX += 0.25;
+    if (     %brickSizeY % 2 == 1) %posY += 0.25;
+    if (%data.brickSizeZ % 2 == 1) %posZ += 0.1;
+
+    %transform = %posX SPC %posY SPC %posZ SPC %rot;
+
+    if (%transform !$= %player.tempBrick.lastTransformSet)
+    {
+        %player.tempBrick.setTransform(%transform);
+        %player.tempBrick.lastTransformSet = %transform;
+    }
+}
+
 package NewBrickTool
 {
     function brickImage::onFire(%this, %obj, %slot, %repeat)
     {
-        if (%obj.client.isAdmin)
+        %client = %obj.client;
+
+        if (%client.useOldBrickTool)
+            return Parent::onFire(%this, %obj, %slot);
+
+        if (!isObject(%client))
+            return;
+
+        if (%client.isAdmin)
             %range = $Pref::Server::NewBrickTool::AdminRange;
         else
             %range = $Pref::Server::NewBrickTool::PlayerRange;
@@ -218,7 +337,6 @@ package NewBrickTool
                 %shape = new StaticShape()
                 {
                     datablock = NewBrickToolTrailShape;
-                    client = %obj.client;
                 };
 
                 MissionCleanup.add(%shape);
@@ -230,7 +348,6 @@ package NewBrickTool
             %shape = new StaticShape()
             {
                 datablock = NewBrickToolTrailShape;
-                client = %obj.client;
             };
 
             MissionCleanup.add(%shape);
@@ -238,8 +355,8 @@ package NewBrickTool
 
         %shape.repeat = %repeat;
 
-        brickDeployProjectile.onCollision(%shape, firstWord(%ray), 1,
-            getWords(%ray, 1, 3), getWords(%ray, 4, 6));
+        placeNewGhostBrick(%client,
+            getWords(%ray, 1, 3), getWords(%ray, 4, 6), %repeat);
 
         %a = %obj.getMuzzlePoint(0);
 
@@ -248,13 +365,19 @@ package NewBrickTool
         else
             %b = getWords(%ray, 1, 3);
 
-        %color = getWords(getColorIDTable(%obj.client.currentColor), 0, 2);
+        %color = getWords(getColorIDTable(%client.currentColor), 0, 2);
         %shape.newBrickToolFade(%a, %b, %color, 1);
     }
 
-    function brickDeployProjectile::onCollision(%this, %obj, %col, %fade, %pos, %normal, %unk)
+    function brickImage::onUnMount(%this, %obj, %slot)
     {
-        Parent::onCollision(%this, %obj, %col, %fade, %pos, %normal, %unk);
+        %shape = %obj.brickImageRepeatShape;
+
+        if (isObject(%shape) && %shape.repeat)
+        {
+            %shape.newBrickToolDisableRepeat();
+            %obj.brickImageRepeatShape = "";
+        }
     }
 
     function Armor::onTrigger(%this, %obj, %slot, %state)

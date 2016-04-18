@@ -1,9 +1,9 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "channel": "release",
   "repositories": [
     {
-      "url": "http://portify.github.io/Server_NewBrickTool/repository.json",
+      "url": "http://port.gitlab.io/blockland-update/repository.json",
       "format": "JSON",
       "id": "0"
     }

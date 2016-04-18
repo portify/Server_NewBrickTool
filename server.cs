@@ -7,6 +7,12 @@ if ($Pref::Server::NewBrickTool::AdminRange $= "")
 if ($Pref::Server::NewBrickTool::AllowRepeat $= "")
     $Pref::Server::NewBrickTool::AllowRepeat = true;
 
+if ($Pref::Server::NewBrickTool::AdminOrb $= "")
+    $Pref::Server::NewBrickTool::AdminOrb = true;
+
+if ($Pref::Server::NewBrickTool::IgnoreRayCasting $= "")
+    $Pref::Server::NewBrickTool::IgnoreRayCasting = true;
+
 datablock ParticleData(brickTrailParticle)
 {
    dragCoefficient = "0";
@@ -141,7 +147,7 @@ function Player::brickImageRepeat(%this)
         return;
     }
 
-    brickImage.onFire(%this, 0, true);
+    newBrickToolFire(%this, true);
     %this.brickImageRepeat = %this.schedule(32, "brickImageRepeat");
 }
 
@@ -159,7 +165,7 @@ function StaticShape::newBrickToolFade(%this, %a, %b, %color, %alpha)
         return;
     }
 
-    %size = 0.05 + %alpha * 0.2;
+    %size = 0.05 + %alpha * 0.075;
     %vector = vectorNormalize(vectorSub(%b, %a));
 
     %xyz = vectorNormalize(vectorCross("1 0 0", %vector));
@@ -264,9 +270,13 @@ function placeNewGhostBrick(%client, %pos, %normal, %noOrient)
         %brickSizeY = %data.brickSizeY;
     }
 
-    %posX = getWord(%pos, 0) + %sizeX           * mFloatLength(getWord(%normal, 0), 0);
-    %posY = getWord(%pos, 1) + %sizeY           * mFloatLength(getWord(%normal, 1), 0);
-    %posZ = getWord(%pos, 2) + getWord(%box, 5) * mFloatLength(getWord(%normal, 2), 0);
+    %offX = %sizeX           * mFloatLength(getWord(%normal, 0), 0);
+    %offY = %sizeY           * mFloatLength(getWord(%normal, 1), 0);
+    %offZ = getWord(%box, 5) * mFloatLength(getWord(%normal, 2), 0);
+
+    %posX = getWord(%pos, 0) + %offX;
+    %posY = getWord(%pos, 1) + %offY;
+    %posZ = getWord(%pos, 2) + %offZ;
 
     if (     %brickSizeX % 2 == 1) %posX -= 0.25;
     if (     %brickSizeY % 2 == 1) %posY -= 0.25;
@@ -287,63 +297,68 @@ function placeNewGhostBrick(%client, %pos, %normal, %noOrient)
         %player.tempBrick.setTransform(%transform);
         %player.tempBrick.lastTransformSet = %transform;
     }
+
+    return vectorSub(%player.tempBrick.getWorldBoxCenter(), %offX SPC %offY SPC %offZ);
 }
 
-package NewBrickTool
+function newBrickToolFire(%obj, %repeat)
 {
-    function brickImage::onFire(%this, %obj, %slot, %repeat)
+    %client = %obj.client;
+
+    if (!isObject(%client))
+        return;
+
+    if (%client.isAdmin)
+        %range = $Pref::Server::NewBrickTool::AdminRange;
+    else
+        %range = $Pref::Server::NewBrickTool::PlayerRange;
+
+    %control = %client.getControlObject();
+
+    if (%control.getClassName() $= "Camera" &&
+        $Pref::Server::NewBrickTool::AdminOrb &&
+        !%control.isOrbitMode() && !%control.getControlObject())
     {
-        %client = %obj.client;
-
-        if (%client.useOldBrickTool)
-            return Parent::onFire(%this, %obj, %slot);
-
-        if (!isObject(%client))
-            return;
-
-        if (%client.isAdmin)
-            %range = $Pref::Server::NewBrickTool::AdminRange;
-        else
-            %range = $Pref::Server::NewBrickTool::PlayerRange;
-
+        %origin = %control.getEyePoint();
+        %vector = vectorScale(%control.getEyeVector(), %range);
+        // %a = vectorSub(%origin, "0 0 1");
+        %a = MatrixMulPoint(%control.getEyeTransform(), "0.4 0.5 -0.5");
+    }
+    else
+    {
         %origin = %obj.getEyePoint();
         %vector = vectorScale(%obj.getEyeVector(), %range);
+        %a = %obj.getMuzzlePoint(0);
+    }
 
-        %ray = containerRayCast(%origin, vectorAdd(%origin, %vector),
-            $TypeMasks::FxBrickObjectType |
-            $TypeMasks::TerrainObjectType |
-            $TypeMasks::StaticShapeObjectType
-        );
+    %mask = $TypeMasks::TerrainObjectType
+          | $TypeMasks::StaticShapeObjectType;
 
-        if (!%ray)
+    if ($Pref::Server::NewBrickTool::IgnoreRayCasting)
+        %mask |= $TypeMasks::FxBrickAlwaysObjectType;
+    else
+        %mask |= $TypeMasks::FxBrickObjectType;
+
+    %ray = containerRayCast(%origin, vectorAdd(%origin, %vector), %mask);
+
+    if (!%ray)
+    {
+        %shape = %obj.brickImageRepeatShape;
+
+        if (%shape.repeat)
         {
-            %shape = %obj.brickImageRepeatShape;
-
-            if (%shape.repeat)
-            {
-                %shape.newBrickToolDisableRepeat();
-                %obj.brickImageRepeatShape = "";
-            }
-
-            return;
+            %shape.newBrickToolDisableRepeat();
+            %obj.brickImageRepeatShape = "";
         }
 
-        if (%repeat)
-        {
-            %shape = %obj.brickImageRepeatShape;
+        return;
+    }
 
-            if (!isObject(%shape))
-            {
-                %shape = new StaticShape()
-                {
-                    datablock = NewBrickToolTrailShape;
-                };
+    if (%repeat)
+    {
+        %shape = %obj.brickImageRepeatShape;
 
-                MissionCleanup.add(%shape);
-                %obj.brickImageRepeatShape = %shape;
-            }
-        }
-        else
+        if (!isObject(%shape))
         {
             %shape = new StaticShape()
             {
@@ -351,26 +366,65 @@ package NewBrickTool
             };
 
             MissionCleanup.add(%shape);
+            %obj.brickImageRepeatShape = %shape;
         }
+    }
+    else
+    {
+        %shape = new StaticShape()
+        {
+            datablock = NewBrickToolTrailShape;
+        };
 
-        %shape.repeat = %repeat;
+        MissionCleanup.add(%shape);
+    }
 
-        placeNewGhostBrick(%client,
-            getWords(%ray, 1, 3), getWords(%ray, 4, 6), %repeat);
+    %shape.repeat = %repeat;
 
-        %a = %obj.getMuzzlePoint(0);
+    %b = placeNewGhostBrick(%client,
+        getWords(%ray, 1, 3), getWords(%ray, 4, 6), %repeat);
 
-        if (isObject(%obj.tempBrick))
-            %b = %obj.tempBrick.getWorldBoxCenter();
-        else
-            %b = getWords(%ray, 1, 3);
+    if (%b $= "")
+        %b = getWords(%ray, 1, 3);
 
-        %color = getWords(getColorIDTable(%client.currentColor), 0, 2);
-        %shape.newBrickToolFade(%a, %b, %color, 1);
+    // if (isObject(%obj.tempBrick))
+    //     // %b = %obj.tempBrick.getWorldBoxCenter();
+    //     %b = %bb;
+    // else
+    //     %b = getWords(%ray, 1, 3);
+
+    %color = getWords(getColorIDTable(%client.currentColor), 0, 2);
+    %shape.newBrickToolFade(%a, %b, %color, 1);
+}
+
+package NewBrickTool
+{
+    function brickImage::onFire(%this, %obj, %slot, %repeat)
+    {
+    }
+
+    function brickImage::onMount(%this, %obj, %slot)
+    {
+        Parent::onMount(%this, %obj, %slot);
+
+        %client = %obj.client;
+
+        if (!isObject(%client))
+            return;
+
+        %control = %client.getControlObject();
+
+        if (%control.getClassName() $= "Camera" && $Pref::Server::NewBrickTool::AdminOrb)
+        {
+            %text = "<font:palatino linotype:86>\n<bitmap:base/client/ui/crossHair>";
+            commandToClient(%client, 'CenterPrint', %text, 0);
+        }
     }
 
     function brickImage::onUnMount(%this, %obj, %slot)
     {
+        Parent::onUnMount(%this, %obj, %slot);
+
         %shape = %obj.brickImageRepeatShape;
 
         if (isObject(%shape) && %shape.repeat)
@@ -378,6 +432,76 @@ package NewBrickTool
             %shape.newBrickToolDisableRepeat();
             %obj.brickImageRepeatShape = "";
         }
+
+        %client = %obj.client;
+
+        if (!isObject(%client))
+            return;
+
+        %control = %client.getControlObject();
+
+        if (%control.getClassName() $= "Camera" && $Pref::Server::NewBrickTool::AdminOrb)
+            commandToClient(%client, 'ClearCenterPrint');
+    }
+
+    function GameConnection::setControlObject(%this, %object)
+    {
+        %previous = %this.getControlObject();
+        Parent::setControlObject(%this, %object);
+        %player = %this.player;
+
+        if ($Pref::Server::NewBrickTool::AdminOrb && isObject(%player) &&
+            %player.getMountedImage(0) == nameToID("brickImage"))
+        {
+            if (%object && %object.getClassName() $= "Camera")
+            {
+                %text = "<font:palatino linotype:86>\n<lmargin:1><bitmap:base/client/ui/crossHair>";
+                commandToClient(%this, 'CenterPrint', %text, 0);
+            }
+            else if (%previous && %previous.getClassName() $= "Camera")
+                commandToClient(%this, 'ClearCenterPrint');
+        }
+    }
+
+    function Observer::onTrigger(%this, %obj, %slot, %state)
+    {
+        %client = %obj.getControllingClient();
+        %player = %client.player;
+
+        if ($Pref::Server::NewBrickTool::AdminOrb && isObject(%player) &&
+            !%obj.isOrbitMode() && !%obj.getControlObject() && %slot == 0 &&
+            %player.getMountedImage(0) == nameToID("brickImage"))
+        {
+            %shape = %player.brickImageRepeatShape;
+
+            if (isObject(%shape))
+            {
+                %player.brickImageRepeatShape = "";
+                %shape.repeat = "";
+                %shape.newBrickToolFade(%shape.a, %shape.b, %shape.color, 1);
+            }
+
+            cancel(%player.brickImageRepeat);
+
+            if (%state)
+            {
+                %text = "<font:palatino linotype:86>\n<lmargin:1><bitmap:base/client/ui/crossHair>";
+                commandToClient(%client, 'CenterPrint', %text, 0);
+
+                if ($Sim::Time - %player.lastBrickImageFire > 0.25)
+                {
+                    newBrickToolFire(%player, false);
+                    %player.lastBrickImageFire = $Sim::Time;
+                }
+
+                if ($Pref::Server::NewBrickTool::AllowRepeat)
+                    %player.brickImageRepeat = %player.schedule(250, "brickImageRepeat");
+            }
+
+            return;
+        }
+
+        Parent::onTrigger(%this, %obj, %slot, %state);
     }
 
     function Armor::onTrigger(%this, %obj, %slot, %state)
@@ -395,8 +519,17 @@ package NewBrickTool
 
             cancel(%obj.brickImageRepeat);
 
-            if (%state && $Pref::Server::NewBrickTool::AllowRepeat)
-                %obj.brickImageRepeat = %obj.schedule(250, "brickImageRepeat");
+            if (%state)
+            {
+                if ($Sim::Time - %obj.lastBrickImageFire > 0.25)
+                {
+                    newBrickToolFire(%obj, false);
+                    %obj.lastBrickImageFire = $Sim::Time;
+                }
+
+                if ($Pref::Server::NewBrickTool::AllowRepeat)
+                    %obj.brickImageRepeat = %obj.schedule(250, "brickImageRepeat");
+            }
 
             return;
         }

@@ -132,6 +132,56 @@ datablock StaticShapeData(NewBrickToolTrailShape)
     shapeFile = "./cylinder_glow.dts";
 };
 
+function serverCmdClearGrid(%client)
+{
+    messageClient(%client, '', '\c5Brick tool grid cleared.');
+    %client.player.nbtUseGrid = false;
+    return;
+}
+
+function serverCmdSetGrid(%client, %x, %y, %z)
+{
+    %player = %client.player;
+    %brick = %player.tempBrick;
+
+    if (!isObject(%brick))
+    {
+        messageClient(%client, '', '\c5You need to have a ghost brick to set the brick tool grid.');
+        return;
+    }
+
+    %data = %brick.getDataBlock();
+
+    if (%x $= "" || %x $= "auto")
+        %x = %data.brickSizeX;
+    else
+        %x = getMax(1, %x | 0);
+
+    if (%y $= "" || %y $= "auto")
+        %y = %data.brickSizeY;
+    else
+        %y = getMax(1, %y | 0);
+
+    if (%z $= "" || %z $= "auto")
+        %z = %data.brickSizeZ;
+    else
+        %z = getMax(1, %z | 0);
+
+    %client.player.nbtUseGrid = true;
+
+    %client.player.nbtGridSizeX = 2 / %x;
+    %client.player.nbtGridSizeY = 2 / %y;
+    %client.player.nbtGridSizeZ = 5 / %z;
+
+    %box = %brick.getPosition();
+
+    %client.player.nbtGridOriginX = getWord(%box, 0);
+    %client.player.nbtGridOriginY = getWord(%box, 1);
+    %client.player.nbtGridOriginZ = getWord(%box, 2);
+
+    messageClient(%client, '', '\c5Brick tool grid set to %1x%2x%3.', %x, %y, %z);
+}
+
 function Player::brickImageRepeat(%this)
 {
     if (%this.getState() $= "Dead" || %this.getMountedImage(0) != nameToID("brickImage"))
@@ -282,9 +332,29 @@ function placeNewGhostBrick(%client, %pos, %normal, %noOrient)
     if (     %brickSizeY % 2 == 1) %posY -= 0.25;
     if (%data.brickSizeZ % 2 == 1) %posZ -= 0.1;
 
-    %posX = mFloatLength(%posX * 2, 0) / 2;
-    %posY = mFloatLength(%posY * 2, 0) / 2;
-    %posZ = mFloatLength(%posZ * 5, 0) / 5;
+    if (%player.nbtUseGrid)
+    {
+        %posX -= %player.nbtGridOriginX;
+        %posY -= %player.nbtGridOriginY;
+        %posZ -= %player.nbtGridOriginZ;
+
+        %posX = mFloatLength(%posX * %player.nbtGridSizeX, 0) / %player.nbtGridSizeX;
+        %posY = mFloatLength(%posY * %player.nbtGridSizeY, 0) / %player.nbtGridSizeY;
+        %posZ = mFloatLength(%posZ * %player.nbtGridSizeZ, 0) / %player.nbtGridSizeZ;
+    }
+    else
+    {
+        %posX = mFloatLength(%posX * 2, 0) / 2;
+        %posY = mFloatLength(%posY * 2, 0) / 2;
+        %posZ = mFloatLength(%posZ * 5, 0) / 5;
+    }
+
+    if (%player.nbtUseGrid)
+    {
+        %posX += %player.nbtGridOriginX;
+        %posY += %player.nbtGridOriginY;
+        %posZ += %player.nbtGridOriginZ;
+    }
 
     if (     %brickSizeX % 2 == 1) %posX += 0.25;
     if (     %brickSizeY % 2 == 1) %posY += 0.25;
